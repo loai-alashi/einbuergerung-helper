@@ -8,6 +8,7 @@ from app_tab6_learn_german import render_tab6
 from app_tab7_technical import render_tab7
 
 st.set_page_config(page_title="Einbürgerung Helper", layout="wide")
+st.title("Einbürgerung – Demo App (Live Test from GITHUB)")
 
 st.title("Einbürgerung – Demo App")
 
