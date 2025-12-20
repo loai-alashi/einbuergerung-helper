@@ -1,43 +1,36 @@
-import os
 import streamlit as st
 from openai import OpenAI
 
+# NEW Gemini SDK
 from google import genai
-from google.genai import types
-from google.genai.errors import ClientError
 
 
 # ------------------------------------------------------------
-# Clients
+# Keys / Clients
 # ------------------------------------------------------------
-client_openai = OpenAI()
-client_gemini = genai.Client(api_key=os.environ.get("GOOGLE_API_KEY"))
+def _get_keys():
+    openai_key = st.secrets.get("OPENAI_API_KEY")
+    google_key = st.secrets.get("GOOGLE_API_KEY")
+    return openai_key, google_key
+
+
+def _get_openai_client():
+    api_key = st.secrets.get("OPENAI_API_KEY", "")
+    if not api_key:
+        return None
+    return OpenAI(api_key=api_key)
+
+
+def _get_gemini_client():
+    api_key = st.secrets.get("GOOGLE_API_KEY", "")
+    if not api_key:
+        return None
+    return genai.Client(api_key=api_key)
+
 
 # ------------------------------------------------------------
-# Persona / system prompts
+# Prompts
 # ------------------------------------------------------------
-SYSTEM_PROMPT = """
-You are 'Einbürgerung Helper' — a cautious assistant for German naturalisation (Einbürgerung).
-
-Scope:
-- Answer ONLY questions related to Einbürgerung in Germany
-  (requirements, process, documents, language, tests, residence, timelines).
-- If the question is not about Einbürgerung, refuse briefly and ask the user to rephrase.
-
-Safety:
-- You are NOT a lawyer. No legal advice. No guarantees.
-- If unsure, say so and recommend contacting the local Ausländerbehörde.
-
-Sources:
-- Prefer official German sources and direct the user to them:
-  bamf.de, bmi.bund.de, bva.bund.de, service.berlin.de, bundesregierung.de
-- If asked about “latest changes”, say you cannot verify live updates and point to official sites.
-
-Style:
-- Simple, short, step-by-step answers.
-- Ask 1–2 clarifying questions if needed.
-"""
-
 SYSTEM_PROMPT_FAST = """
 You are 'Einbürgerung Helper' for German naturalisation (Einbürgerung).
 
@@ -54,7 +47,7 @@ You are 'Einbürgerung Helper' for German naturalisation (Einbürgerung).
 Mode: OFFICIAL SOURCES (browsing).
 - Answer ONLY Einbürgerung questions.
 - Use web search results from allowed official domains when needed.
-- Cite/mention the site you used (example: “According to bamf.de…”).
+- Mention the site you used (example: “According to bamf.de…”).
 - Be short and clear. No legal advice.
 """
 
@@ -66,84 +59,101 @@ ALLOWED_DOMAINS = [
     "bundesregierung.de",
 ]
 
-OFFICIAL_SITE_QUERY = (
-    "site:bamf.de OR site:bmi.bund.de OR site:bva.bund.de OR "
-    "site:service.berlin.de OR site:bundesregierung.de"
-)
 
 # ------------------------------------------------------------
-# Chat logic (ONE function, provider + optional search)
+# Chat logic
 # ------------------------------------------------------------
-def answer_question(user_q: str, provider: str, use_search: bool = False) -> str:
+def _answer_with_openai(user_q: str, use_search: bool) -> str:
     system_prompt = SYSTEM_PROMPT_BROWSE if use_search else SYSTEM_PROMPT_FAST
 
-    # --- OpenAI ---
-    if provider == "OpenAI":
-        if use_search:
-            r = client_openai.responses.create(
-                model="gpt-5",
-                tools=[{"type": "web_search", "filters": {"allowed_domains": ALLOWED_DOMAINS}}],
-                input=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_q},
-                ],
-                timeout=20,
-            )
-            return r.output_text
+    client = _get_openai_client()
+    if client is None:
+        return "OpenAI is not configured (missing OPENAI_API_KEY)."
 
-        c = client_openai.chat.completions.create(
-            model="gpt-4.1-mini",
-            messages=[
+    if use_search:
+        r = client.responses.create(
+            model="gpt-5",
+            tools=[{"type": "web_search", "filters": {"allowed_domains": ALLOWED_DOMAINS}}],
+            input=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_q},
             ],
         )
-        return c.choices[0].message.content
+        return r.output_text
 
-    # --- Gemini ---
-    query = user_q
-    tools = None
-    if use_search:
-        query = OFFICIAL_SITE_QUERY + "\n\n" + user_q
-        tools = [types.Tool(google_search=types.GoogleSearch())]
-
-    resp = client_gemini.models.generate_content(
-        model="gemini-2.0-flash",
-        contents=query,
-        config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            tools=tools,
-        ),
+    c = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        messages=[
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_q},
+        ],
     )
-    return resp.text
+    return c.choices[0].message.content
+
+
+def _answer_with_gemini(user_q: str) -> str:
+    client = _get_gemini_client()
+    if client is None:
+        return "Gemini is not configured (missing GOOGLE_API_KEY)."
+
+    prompt = f"{SYSTEM_PROMPT_FAST}\n\nUser question:\n{user_q}"
+
+    # Try a couple model names commonly supported by the new SDK
+    model_names = ["gemini-2.0-flash", "gemini-1.5-flash"]
+
+    last_error = None
+    for name in model_names:
+        try:
+            resp = client.models.generate_content(
+                model=name,
+                contents=prompt,
+            )
+            return resp.text
+        except Exception as e:
+            last_error = e
+
+    return f"Gemini failed. Last error: {last_error}"
+
+
+def answer_question(user_q: str, provider: str, use_search: bool) -> str:
+    if provider == "OpenAI":
+        return _answer_with_openai(user_q, use_search=use_search)
+
+    # provider == Gemini
+    if use_search:
+        return "Official sources mode is OpenAI-only right now. Switch provider to OpenAI for that."
+
+    return _answer_with_gemini(user_q)
 
 
 # ------------------------------------------------------------
 # Streamlit UI
 # ------------------------------------------------------------
 def render_tab4():
-    st.write(
-        "Ask general questions about German naturalisation (Einbürgerung). "
-        "This chatbot gives simplified explanations, not legal advice."
-    )
+    st.title("Chatbot")
 
-    provider = st.selectbox("Provider", ["OpenAI", "Gemini"], index=0)
-    use_official = st.toggle("Use official sources", value=False)
+    openai_key, google_key = _get_keys()
 
-    st.caption("Mode: Official sources (slower)." if use_official else "Mode: Fast (no browsing).")
-    st.markdown("---")
+    provider_options = []
+    if openai_key:
+        provider_options.append("OpenAI")
+    if google_key:
+        provider_options.append("Gemini")
 
-    # Chat memory
+    if not provider_options:
+        st.warning("Chatbot is disabled because API keys are missing in .streamlit/secrets.toml")
+        return
+
+    provider = st.selectbox("Provider", provider_options)
+    use_official = st.toggle("Official sources (OpenAI only)", value=False)
+
     if "chat" not in st.session_state:
         st.session_state.chat = []
 
-    # Show history
     for m in st.session_state.chat:
         st.chat_message(m["role"]).write(m["content"])
 
-    # Input
     prompt = st.chat_input("Ask about Einbürgerung…")
-
     if prompt:
         st.session_state.chat.append({"role": "user", "content": prompt})
         reply = answer_question(prompt, provider=provider, use_search=use_official)
