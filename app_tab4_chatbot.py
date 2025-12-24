@@ -1,17 +1,15 @@
+# app_tab4_chatbot.py  (replace ONLY your render_tab4() with this one)
+
 import streamlit as st
-from openai import OpenAI
+from ui_components import section_header, card_open, card_close
 
-# NEW Gemini SDK
-from google import genai
-
-
-# ------------------------------------------------------------
-# Keys / Clients
-# ------------------------------------------------------------
 def _get_keys():
     openai_key = st.secrets.get("OPENAI_API_KEY")
     google_key = st.secrets.get("GOOGLE_API_KEY")
     return openai_key, google_key
+
+from openai import OpenAI
+import google.generativeai as genai
 
 
 def _get_openai_client():
@@ -21,117 +19,61 @@ def _get_openai_client():
     return OpenAI(api_key=api_key)
 
 
-def _get_gemini_client():
+def _get_gemini_model():
     api_key = st.secrets.get("GOOGLE_API_KEY", "")
     if not api_key:
         return None
-    return genai.Client(api_key=api_key)
 
+    genai.configure(api_key=api_key)
 
-# ------------------------------------------------------------
-# Prompts
-# ------------------------------------------------------------
-SYSTEM_PROMPT_FAST = """
-You are 'Einbürgerung Helper' for German naturalisation (Einbürgerung).
+    # Try a few common model names (depends on the project/key availability)
+    for name in ["gemini-1.5-flash", "gemini-1.5-pro", "gemini-1.0-pro"]:
+        try:
+            return genai.GenerativeModel(name)
+        except Exception:
+            continue
 
-Mode: FAST (no browsing).
-- Answer ONLY Einbürgerung questions.
-- Be short and clear.
-- Say clearly you are NOT checking websites right now and info may be outdated.
-- You may recommend official sites, but do NOT claim you just verified anything.
-"""
+    return None
 
-SYSTEM_PROMPT_BROWSE = """
-You are 'Einbürgerung Helper' for German naturalisation (Einbürgerung).
+def answer_question(user_q: str, provider: str, use_search: bool = False) -> str:
+    system_prompt = (
+        "You are an assistant for German naturalisation (Einbürgerung). "
+        "This is not legal advice."
+    )
 
-Mode: OFFICIAL SOURCES (browsing).
-- Answer ONLY Einbürgerung questions.
-- Use web search results from allowed official domains when needed.
-- Mention the site you used (example: “According to bamf.de…”).
-- Be short and clear. No legal advice.
-"""
+    # OpenAI
+    if provider == "OpenAI":
+        client = _get_openai_client()
+        if not client:
+            return "OpenAI is not configured."
 
-ALLOWED_DOMAINS = [
-    "bamf.de",
-    "bmi.bund.de",
-    "bva.bund.de",
-    "service.berlin.de",
-    "bundesregierung.de",
-]
-
-
-# ------------------------------------------------------------
-# Chat logic
-# ------------------------------------------------------------
-def _answer_with_openai(user_q: str, use_search: bool) -> str:
-    system_prompt = SYSTEM_PROMPT_BROWSE if use_search else SYSTEM_PROMPT_FAST
-
-    client = _get_openai_client()
-    if client is None:
-        return "OpenAI is not configured (missing OPENAI_API_KEY)."
-
-    if use_search:
-        r = client.responses.create(
-            model="gpt-5",
-            tools=[{"type": "web_search", "filters": {"allowed_domains": ALLOWED_DOMAINS}}],
-            input=[
+        response = client.chat.completions.create(
+            model="gpt-4.1-mini",
+            messages=[
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_q},
             ],
         )
-        return r.output_text
+        return response.choices[0].message.content
 
-    c = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_q},
-        ],
+    # Gemini
+    model = _get_gemini_model()
+    if not model:
+        return "Gemini is not available."
+
+    resp = model.generate_content(
+        f"{system_prompt}\n\nUser question:\n{user_q}"
     )
-    return c.choices[0].message.content
+    return resp.text
 
 
-def _answer_with_gemini(user_q: str) -> str:
-    client = _get_gemini_client()
-    if client is None:
-        return "Gemini is not configured (missing GOOGLE_API_KEY)."
-
-    prompt = f"{SYSTEM_PROMPT_FAST}\n\nUser question:\n{user_q}"
-
-    # Try a couple model names commonly supported by the new SDK
-    model_names = ["gemini-2.0-flash", "gemini-1.5-flash"]
-
-    last_error = None
-    for name in model_names:
-        try:
-            resp = client.models.generate_content(
-                model=name,
-                contents=prompt,
-            )
-            return resp.text
-        except Exception as e:
-            last_error = e
-
-    return f"Gemini failed. Last error: {last_error}"
-
-
-def answer_question(user_q: str, provider: str, use_search: bool) -> str:
-    if provider == "OpenAI":
-        return _answer_with_openai(user_q, use_search=use_search)
-
-    # provider == Gemini
-    if use_search:
-        return "Official sources mode is OpenAI-only right now. Switch provider to OpenAI for that."
-
-    return _answer_with_gemini(user_q)
-
-
-# ------------------------------------------------------------
-# Streamlit UI
-# ------------------------------------------------------------
 def render_tab4():
-    st.title("Chatbot")
+    section_header(
+        "Chatbot",
+        "Ask questions about German naturalisation (Einbürgerung). Not legal advice."
+    )
 
+    # --- Keys / available providers ---
     openai_key, google_key = _get_keys()
 
     provider_options = []
@@ -144,22 +86,76 @@ def render_tab4():
         st.warning("Chatbot is disabled because API keys are missing in .streamlit/secrets.toml")
         return
 
-    provider = st.selectbox("Provider", provider_options)
-    use_official = st.toggle("Official sources (OpenAI only)", value=False)
+    # --- Local UI-only CSS (groups elements into one 'panel') ---
+    st.markdown("""
+    <style>
+      .chat-panel {
+        border: 1px solid rgba(255,255,255,0.08);
+        border-radius: 18px;
+        padding: 14px 14px 10px 14px;
+        background: rgba(255,255,255,0.02);
+        box-shadow: 0 14px 40px rgba(0,0,0,0.30);
+        margin-bottom: 14px;
+      }
+      .chat-panel .hint {
+        opacity: 0.75;
+        font-size: 0.92rem;
+        padding-top: 6px;
+      }
+      .chat-divider {
+        height: 1px;
+        background: rgba(255,255,255,0.08);
+        margin: 12px 0 10px 0;
+      }
+    </style>
+    """, unsafe_allow_html=True)
 
+    # --- One grouped "panel" for settings + chat ---
+    st.markdown('<div class="chat-panel">', unsafe_allow_html=True)
+
+    # Settings row (NOT sidebar)
+    c1, c2, c3 = st.columns([2.2, 2.2, 5.6])
+    with c1:
+        provider = st.selectbox(
+            "Provider",
+            provider_options,
+            key="chat_provider",
+            label_visibility="visible",
+        )
+
+    with c2:
+        use_official = st.toggle(
+            "Official sources",
+            value=False,
+            key="chat_official",
+            help="Only applies to OpenAI (restricted to official domains).",
+        )
+
+    with c3:
+        if provider != "OpenAI":
+            st.markdown('<div class="hint">Gemini: fast mode (no official browsing).</div>', unsafe_allow_html=True)
+        else:
+            msg = "ON: Official sources mode (OpenAI web_search restricted)." if use_official else "OFF: Fast mode. No web browsing, information may be outdated."
+            st.markdown(f'<div class="hint">{msg}</div>', unsafe_allow_html=True)
+
+    st.markdown('<div class="chat-divider"></div>', unsafe_allow_html=True)
+
+    # Chat memory
     if "chat" not in st.session_state:
         st.session_state.chat = []
 
+    # Chat history inside a nice card
+    card_open()
     for m in st.session_state.chat:
         st.chat_message(m["role"]).write(m["content"])
+    card_close()
 
+    # Input stays inside the same panel
     prompt = st.chat_input("Ask about Einbürgerung…")
+    st.markdown("</div>", unsafe_allow_html=True)
+
     if prompt:
         st.session_state.chat.append({"role": "user", "content": prompt})
-        reply = answer_question(prompt, provider=provider, use_search=use_official)
+        reply = answer_question(prompt, provider=provider, use_search=(use_official and provider == "OpenAI"))
         st.session_state.chat.append({"role": "assistant", "content": reply})
         st.rerun()
-
-
-if __name__ == "__main__":
-    render_tab4()

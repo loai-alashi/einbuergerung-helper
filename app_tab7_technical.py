@@ -1,9 +1,13 @@
 import streamlit as st
 import pickle
+from ui_components import section_header
 
 def render_tab7():
-    st.title("Model details (technical info)")
-
+    section_header(
+    "Model details",
+    "(technical info)",
+)
+ 
     with open("models/eligibility_feature_columns.pkl", "rb") as f:
         cols = pickle.load(f)
 
