@@ -7,6 +7,7 @@ from ui_components import section_header, card_open, card_close
 # ============================================================
 # CACHED LOADERS (short & clean)
 # ============================================================
+#st.warning("✅ CHATBOT FILE UPDATED (render_tab4) is running")
 
 @st.cache_resource
 def load_ann_model():
@@ -86,7 +87,7 @@ def render_tab1():
             )
 
         # --- Advanced toggles hidden (shorter page) ---
-        with st.expander("More details (optional)", expanded=False):
+        with st.expander("More details", expanded=False):
             a1, a2 = st.columns(2)
 
             with a1:

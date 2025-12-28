@@ -123,7 +123,7 @@ def render_tab8():
 
 
     st.markdown(f"**Official question catalogue:** {OFFICIAL_QUIZ_CATALOG_URL}")
-    st.markdown("---")
+    
 
     # 1) Fetch questions first (needed to know total)
     # Fetch questions only once per browser session (speed)
